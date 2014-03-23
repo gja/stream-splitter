@@ -58,9 +58,11 @@ public class StreamSplitter {
         this(input, 262144, 4);
     }
 
-    public synchronized Reader getStream() {
+    public Reader getStream() {
         StreamSplitterStream buffer = new StreamSplitterStream(this);
-        streams.add(buffer);
+        synchronized(streams) {
+            streams.add(buffer);
+        }
         return buffer;
     }
 
@@ -75,7 +77,9 @@ public class StreamSplitter {
     }
 
     void deleteStream(Reader reader) {
-        streams.remove(reader);
+        synchronized(streams) {
+            streams.remove(reader);
+        }
     }
 
     private void deletePage(Integer pageNumber) throws IOException {
@@ -112,6 +116,7 @@ public class StreamSplitter {
         }
     }
 
+    // Call from within synchronized(streams)
     private boolean isPageInUse(int pageNumber) {
         for (StreamSplitterStream stream : streams)
             if (stream.pageNumber == pageNumber)
@@ -125,7 +130,6 @@ public class StreamSplitter {
         }
     }
 }
-
 
 
 class StreamSplitterStream extends Reader {
