@@ -58,12 +58,24 @@ public class StreamSplitter {
         this(input, 262144, 4);
     }
 
-    public Reader getStream() {
+    public Reader newStream() {
         StreamSplitterStream buffer = new StreamSplitterStream(this);
         synchronized(streams) {
             streams.add(buffer);
         }
         return buffer;
+    }
+
+    public static List<Reader> splitStream(Reader input, int number) {
+        return splitStream(input, number, 262144, 4);
+    }
+
+    public static List<Reader> splitStream(Reader input, int number, int pageSize, int pageCount) {
+        StreamSplitter splitter = new StreamSplitter(input, pageSize, pageCount);
+        List<Reader> list = new ArrayList<Reader>();
+        while(number-- > 0)
+            list.add(splitter.newStream());
+        return list;
     }
 
     Reader fetchPage(int pageNumber) throws IOException {
@@ -79,6 +91,7 @@ public class StreamSplitter {
     void deleteStream(Reader reader) {
         synchronized(streams) {
             streams.remove(reader);
+            wakeUpSleepingThreads();
         }
     }
 
