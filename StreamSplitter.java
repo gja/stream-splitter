@@ -51,7 +51,7 @@ public class StreamSplitter {
     }
 
     public StreamSplitter(InputStream input) {
-        this(input, 262144, 4);
+        this(input, 8192, 4);
     }
 
     public InputStream newStream() {
@@ -63,7 +63,7 @@ public class StreamSplitter {
     }
 
     public static List<InputStream> splitStream(InputStream input, int number) {
-        return splitStream(input, number, 262144, 4);
+        return splitStream(input, number, 8192, 4);
     }
 
     public static List<InputStream> splitStream(InputStream input, int number, int pageSize, int pageCount) {
