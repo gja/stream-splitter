@@ -4,13 +4,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.ArrayList;
-import java.io.Reader;
+import java.io.InputStream;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.CharArrayReader;
+import java.io.ByteArrayInputStream;
 import java.lang.InterruptedException;
 
-class StreamSplitterEmptyReader extends Reader {
-    public int read(char[] cbuf, int off, int len) {
+class StreamSplitterEmptyInputStream extends InputStream {
+    public int read() {
         return -1;
     }
 
@@ -18,19 +19,19 @@ class StreamSplitterEmptyReader extends Reader {
 }
 
 class InputPage {
-    private char[] buffer;
+    private byte[] buffer;
     private int length;
 
-    InputPage(Reader reader, int pageSize) throws IOException {
-        buffer = new char[pageSize];
-        length = reader.read(buffer, 0, pageSize);
+    InputPage(InputStream inputStream, int pageSize) throws IOException {
+        buffer = new byte[pageSize];
+        length = inputStream.read(buffer, 0, pageSize);
     }
 
-    Reader toReader() throws IOException {
+    InputStream toInputStream() throws IOException {
         if (length == -1)
-            return new StreamSplitterEmptyReader();
+            return new StreamSplitterEmptyInputStream();
         else
-            return new CharArrayReader(buffer, 0, length);
+            return new ByteArrayInputStream(buffer, 0, length);
     }
 }
 
@@ -38,10 +39,10 @@ public class StreamSplitter {
     private List<StreamSplitterStream> streams;
     private Map<Integer, InputPage> buffers;
     private int pageSize;
-    private Reader input;
+    private InputStream input;
     private int pageCount;
 
-    public StreamSplitter(Reader input, int pageSize, int pageCount) {
+    public StreamSplitter(InputStream input, int pageSize, int pageCount) {
         streams = new ArrayList<StreamSplitterStream>();
         buffers = new HashMap<Integer, InputPage>();
         this.pageSize = pageSize;
@@ -49,11 +50,11 @@ public class StreamSplitter {
         this.pageCount = pageCount;
     }
 
-    public StreamSplitter(Reader input) {
+    public StreamSplitter(InputStream input) {
         this(input, 262144, 4);
     }
 
-    public Reader newStream() {
+    public InputStream newStream() {
         StreamSplitterStream buffer = new StreamSplitterStream(this);
         synchronized(streams) {
             streams.add(buffer);
@@ -61,31 +62,33 @@ public class StreamSplitter {
         return buffer;
     }
 
-    public static List<Reader> splitStream(Reader input, int number) {
+    public static List<InputStream> splitStream(InputStream input, int number) {
         return splitStream(input, number, 262144, 4);
     }
 
-    public static List<Reader> splitStream(Reader input, int number, int pageSize, int pageCount) {
+    public static List<InputStream> splitStream(InputStream input, int number, int pageSize, int pageCount) {
+        if(input == null)
+            return new ArrayList<InputStream>();
         StreamSplitter splitter = new StreamSplitter(input, pageSize, pageCount);
-        List<Reader> list = new ArrayList<Reader>();
+        List<InputStream> list = new ArrayList<InputStream>();
         while(number-- > 0)
             list.add(splitter.newStream());
         return list;
     }
 
-    Reader fetchPage(int pageNumber) throws IOException {
+    InputStream fetchPage(int pageNumber) throws IOException {
         InputPage page = buffers.get(pageNumber);
         if (page == null)
             page = populatePage(pageNumber);
 
         wakeUpSleepingThreads();
 
-        return page.toReader();
+        return page.toInputStream();
     }
 
-    void deleteStream(Reader reader) {
+    void deleteStream(InputStream inputStream) {
         synchronized(streams) {
-            streams.remove(reader);
+            streams.remove(inputStream);
             wakeUpSleepingThreads();
         }
     }
@@ -96,7 +99,7 @@ public class StreamSplitter {
                 while(isPageInUse(pageNumber))
                     streams.wait();
             } catch (InterruptedException e) {
-                throw new IOException("StreamSplitter: Interupted while waiting for readers to catch up", e);
+                throw new IOException("StreamSplitter: Interupted while waiting for inputStreams to catch up", e);
             }
         }
 
@@ -140,31 +143,31 @@ public class StreamSplitter {
 }
 
 
-class StreamSplitterStream extends Reader {
+class StreamSplitterStream extends InputStream {
     private StreamSplitter parent;
-    private Reader reader;
+    private InputStream inputStream;
     int pageNumber;
 
     StreamSplitterStream(StreamSplitter parent) {
         this.parent = parent;
-        this.reader = new StreamSplitterEmptyReader();
+        this.inputStream = new StreamSplitterEmptyInputStream();
         pageNumber = -1;
     }
 
-    public synchronized int read(char[] cbuf, int off, int len) throws IOException {
-        int ret = reader.read(cbuf, off, len);
+    public int read() throws IOException {
+        int ret = inputStream.read();
 
         if (ret != -1)
             return ret;
 
-        reader.close();
-        reader = parent.fetchPage(++pageNumber);
-        return reader.read(cbuf, off, len);
+        inputStream.close();
+        inputStream = parent.fetchPage(++pageNumber);
+        return inputStream.read();
     }
 
-    public synchronized void close() throws IOException {
-        reader.close();
-        reader = new StreamSplitterEmptyReader();
+    public void close() throws IOException {
+        inputStream.close();
+        inputStream = new StreamSplitterEmptyInputStream();
         parent.deleteStream(this);
     }
 }
