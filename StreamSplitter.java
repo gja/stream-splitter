@@ -36,14 +36,14 @@ class InputPage {
 }
 
 public class StreamSplitter {
-    private List<StreamSplitterStream> streams;
+    private Map<StreamSplitterStream, Integer> streams;
     private Map<Integer, InputPage> buffers;
     private int pageSize;
     private InputStream input;
     private int pageCount;
 
     public StreamSplitter(InputStream input, int pageSize, int pageCount) {
-        streams = new ArrayList<StreamSplitterStream>();
+        streams = new HashMap<StreamSplitterStream, Integer>();
         buffers = new HashMap<Integer, InputPage>();
         this.pageSize = pageSize;
         this.input = input;
@@ -52,14 +52,6 @@ public class StreamSplitter {
 
     public StreamSplitter(InputStream input) {
         this(input, 8192, 4);
-    }
-
-    public InputStream newStream() {
-        StreamSplitterStream buffer = new StreamSplitterStream(this);
-        synchronized(streams) {
-            streams.add(buffer);
-        }
-        return buffer;
     }
 
     public static List<InputStream> splitStream(InputStream input, int number) {
@@ -76,7 +68,16 @@ public class StreamSplitter {
         return list;
     }
 
-    InputStream fetchPage(int pageNumber) throws IOException {
+    public synchronized InputStream newStream() {
+        StreamSplitterStream stream = new StreamSplitterStream(this);
+        streams.put(stream, -1);
+        return stream;
+    }
+
+    synchronized InputStream fetchPage(StreamSplitterStream stream) throws IOException {
+        Integer pageNumber = streams.get(stream) + 1;
+        streams.put(stream, pageNumber);
+
         InputPage page = buffers.get(pageNumber);
         if (page == null)
             page = populatePage(pageNumber);
@@ -86,59 +87,48 @@ public class StreamSplitter {
         return page.toInputStream();
     }
 
-    void deleteStream(InputStream inputStream) {
-        synchronized(streams) {
-            streams.remove(inputStream);
-            wakeUpSleepingThreads();
-        }
+    private synchronized InputPage populatePage(Integer pageNumber) throws IOException {
+        // Someone else has populated this while we waited
+        if (buffers.get(pageNumber) != null)
+            return buffers.get(pageNumber);
+
+        deletePage(pageNumber - pageCount);
+
+        InputPage page = new InputPage(input, pageSize);
+        buffers.put(pageNumber, page);
+        return page;
     }
 
-    private void deletePage(Integer pageNumber) throws IOException {
-        synchronized(streams) {
-            try {
-                while(isPageInUse(pageNumber))
-                    streams.wait();
-            } catch (InterruptedException e) {
-                throw new IOException("StreamSplitter: Interupted while waiting for inputStreams to catch up", e);
-            }
-        }
+    synchronized void deleteStream(InputStream inputStream) {
+        streams.remove(inputStream);
+        wakeUpSleepingThreads();
+    }
 
+    private synchronized void deletePage(Integer pageNumber) throws IOException {
+        try {
+            while(isPageInUse(pageNumber))
+                wait();
+        } catch (InterruptedException e) {
+            throw new IOException("StreamSplitter: Interupted while waiting for inputStreams to catch up", e);
+        }
 
         InputPage pageToDelete = buffers.get(pageNumber);
         if (pageToDelete == null)
             return;
 
-        synchronized(buffers) {
-            buffers.remove(pageNumber);
-        }
-    }
-
-    private InputPage populatePage(Integer pageNumber) throws IOException {
-        synchronized(buffers) {
-            // Someone else has populated this while we waited
-            if (buffers.get(pageNumber) != null)
-                return buffers.get(pageNumber);
-
-            deletePage(pageNumber - pageCount);
-
-            InputPage page = new InputPage(input, pageSize);
-            buffers.put(pageNumber, page);
-            return page;
-        }
+        buffers.remove(pageNumber);
     }
 
     // Call from within synchronized(streams)
-    private boolean isPageInUse(int pageNumber) {
-        for (StreamSplitterStream stream : streams)
-            if (stream.pageNumber == pageNumber)
+    private synchronized boolean isPageInUse(Integer pageNumber) {
+        for (Integer n : streams.values())
+            if (n == pageNumber)
                 return true;
         return false;
     }
 
-    private void wakeUpSleepingThreads() {
-        synchronized(streams) {
-            streams.notify();
-        }
+    private synchronized void wakeUpSleepingThreads() {
+        notify();
     }
 }
 
@@ -146,12 +136,10 @@ public class StreamSplitter {
 class StreamSplitterStream extends InputStream {
     private StreamSplitter parent;
     private InputStream inputStream;
-    int pageNumber;
 
     StreamSplitterStream(StreamSplitter parent) {
         this.parent = parent;
         this.inputStream = new StreamSplitterEmptyInputStream();
-        pageNumber = -1;
     }
 
     public int read() throws IOException {
@@ -161,7 +149,7 @@ class StreamSplitterStream extends InputStream {
             return ret;
 
         inputStream.close();
-        inputStream = parent.fetchPage(++pageNumber);
+        inputStream = parent.fetchPage(this);
         return inputStream.read();
     }
 
